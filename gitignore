@@ -1,0 +1,43 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+.python-version
+
+# ---- Environments ----
+.env
+.env.*
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# ---- Editors/OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Caches/Logs ----
+.cache/
+*.log
+
+# ---- Data/DB (keep your demo CSV!) ----
+*.sqlite*
+*.db
+
+# ---- Streamlit ----
+.streamlit/secrets.toml  # never commit secrets

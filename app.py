@@ -48,7 +48,7 @@ def llm_auto_insights(client, profile_json):
                 {"role":"user","content":(
                     "Write 3–6 bullet executive insights and 3–5 follow-up business questions "
                     "based on this dataset profile.\n\nPROFILE JSON:\n"
-                    + json.dumps(profile_json)[:8000]
+                    + json.dumps(profile_json, default=str)[:8000]
                 )}
             ],
         )
@@ -71,7 +71,7 @@ def llm_to_sql(client, question: str, profile_json: dict) -> dict:
                 )},
                 {"role":"user","content":(
                     f"Question: {question}\n\n"
-                    f"Schema & stats:\n{json.dumps(profile_json)[:6000]}"
+                    f"Schema & stats:\n{json.dumps(profile_json, default=str)[:6000]}"
                 )}
             ],
         )

@@ -190,16 +190,28 @@ def auto_charts(df: pd.DataFrame):
         fig = px.box(dfx, x=c, y=y, points="suspectedoutliers", title=f"{y} by {c} (box)")
         charts.append(("Box", beautify_fig(fig, c, y)))
 
+
     # E) % distribution over time
     if dt and cat:
         d, c = dt[0], cat[0]
         k = df[c].astype(str).value_counts().head(5).index
         g = df[df[c].astype(str).isin(k)].copy()
         g["month"] = pd.to_datetime(g[d]).dt.to_period("M").dt.to_timestamp()
-        tbl = g.pivot_table(index="month", columns=c, values=g.columns[0], aggfunc="size").fillna(0)
-        tbl_pct = (tbl.T / tbl.T.sum()).T.reset_index()
-        long = tbl_pct.melt(id_vars="month", var_name=c, value_name="pct")
-        fig = px.area(long, x="month", y="pct", color=c, groupnorm="fraction", title=f"Distribution of {c} over time")
+
+        # Count rows per (month, category) and unstack to columns
+        tbl = g.groupby(["month", c]).size().unstack(fill_value=0)
+
+        # Row-normalize to percentages, then go long for plotting
+        long = (
+            (tbl.div(tbl.sum(axis=1), axis=0))
+            .reset_index()
+            .melt(id_vars="month", var_name=c, value_name="pct")
+        )
+
+        fig = px.area(
+            long, x="month", y="pct", color=c, groupnorm="fraction",
+            title=f"Distribution of {c} over time"
+        )
         fig.update_yaxes(tickformat=".0%")
         charts.append(("% over time", beautify_fig(fig, "month", "%")))
 

@@ -4,3 +4,4 @@ numpy>=1.26
 plotly>=5.22
 duckdb>=1.0
 openai>=1.44
+kaleido>=0.2.1

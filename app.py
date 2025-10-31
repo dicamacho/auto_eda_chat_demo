@@ -1,4 +1,4 @@
-# app.py (upgraded: elegant visuals + richer analysis)
+# app.py (upgraded + downloads + theme toggle)
 import os, re, json
 import pandas as pd
 import numpy as np
@@ -9,6 +9,10 @@ import streamlit as st
 
 st.set_page_config(page_title="Auto-EDA Chat Demo", page_icon="📊", layout="wide")
 
+# ---------- Theme Toggle ----------
+with st.sidebar:
+    theme = st.selectbox("Theme", ["Dark","Light"], index=0)
+
 # ---------- Plotly Theme (elegant dark) ----------
 pio.templates["elegant_dark"] = pio.templates["plotly_dark"]
 pio.templates["elegant_dark"].layout.update(
@@ -18,7 +22,7 @@ pio.templates["elegant_dark"].layout.update(
     hoverlabel=dict(bgcolor="#111827", font_size=13),
     margin=dict(l=50,r=20,t=40,b=40),
 )
-pio.templates.default = "elegant_dark"
+pio.templates.default = "elegant_dark" if theme == "Dark" else "plotly_white"
 
 # ---------- Optional LLM ----------
 OPENAI_AVAILABLE = False
@@ -29,7 +33,6 @@ except Exception:
     OPENAI_AVAILABLE = False
 
 def get_openai_client():
-    """Reads OPENAI_API_KEY and optional OPENAI_BASE_URL from env or st.secrets."""
     if not OPENAI_AVAILABLE:
         return None
     key = os.environ.get("OPENAI_API_KEY") or (st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else None)
@@ -117,7 +120,7 @@ def fmt_pct(x):
 
 def beautify_fig(fig, x_title=None, y_title=None):
     if x_title: fig.update_xaxes(title=x_title, showgrid=False)
-    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor="rgba(255,255,255,0.06)")
+    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor="rgba(0,0,0,0.06)" if pio.templates.default=="plotly_white" else "rgba(255,255,255,0.06)")
     fig.update_layout(legend_title=None)
     return fig
 
@@ -190,28 +193,19 @@ def auto_charts(df: pd.DataFrame):
         fig = px.box(dfx, x=c, y=y, points="suspectedoutliers", title=f"{y} by {c} (box)")
         charts.append(("Box", beautify_fig(fig, c, y)))
 
-
-    # E) % distribution over time
+    # E) % distribution over time (safe)
     if dt and cat:
         d, c = dt[0], cat[0]
         k = df[c].astype(str).value_counts().head(5).index
         g = df[df[c].astype(str).isin(k)].copy()
         g["month"] = pd.to_datetime(g[d]).dt.to_period("M").dt.to_timestamp()
-
-        # Count rows per (month, category) and unstack to columns
         tbl = g.groupby(["month", c]).size().unstack(fill_value=0)
-
-        # Row-normalize to percentages, then go long for plotting
         long = (
             (tbl.div(tbl.sum(axis=1), axis=0))
             .reset_index()
             .melt(id_vars="month", var_name=c, value_name="pct")
         )
-
-        fig = px.area(
-            long, x="month", y="pct", color=c, groupnorm="fraction",
-            title=f"Distribution of {c} over time"
-        )
+        fig = px.area(long, x="month", y="pct", color=c, groupnorm="fraction", title=f"Distribution of {c} over time")
         fig.update_yaxes(tickformat=".0%")
         charts.append(("% over time", beautify_fig(fig, "month", "%")))
 
@@ -237,9 +231,9 @@ def auto_charts(df: pd.DataFrame):
 
     return charts
 
-# ---------- UI ----------
+# ---------- Header ----------
 st.markdown("""
-<div style="padding: 8px 14px; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; background: rgba(255,255,255,0.03)">
+<div style="padding: 8px 14px; border: 1px solid rgba(127,127,127,0.12); border-radius: 10px; background: rgba(127,127,127,0.05)">
   <h1 style="margin:0;font-size:1.8rem;">📊 Auto-EDA Chat Demo</h1>
   <p style="margin:0.25rem 0 0 0;opacity:0.8;">
     Upload a CSV or try the demo dataset. Get instant charts, concise insights, and chat with an assistant that proposes safe, SELECT-only SQL.
@@ -248,7 +242,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("Demo Controls")
+    st.header("Data")
     use_demo = st.toggle("Use demo dataset", value=True, help="Turn off to upload your own CSV.")
     if not use_demo:
         uploaded = st.file_uploader("Upload CSV", type=["csv"])
@@ -299,11 +293,27 @@ for (label, val), col in zip(kpi.items(), cols):
 
 tabs = st.tabs(["📈 Charts", "🧠 Insights", "💬 Chat", "🧾 Schema"])
 
+# ---------- Charts Tab ----------
 with tabs[0]:
     st.subheader("Auto-generated visuals")
-    for title, fig in auto_charts(df):
+    for i, (title, fig) in enumerate(auto_charts(df)):
         st.plotly_chart(fig, use_container_width=True)
+        # PNG download (requires kaleido)
+        try:
+            png = fig.to_image(format="png")
+            safe_title = "".join(ch if ch.isalnum() or ch in (" ","_","-") else "_" for ch in title).strip().replace(" ","_")
+            st.download_button(
+                "Download chart (PNG)",
+                data=png,
+                file_name=f"{safe_title or 'chart'}_{i+1}.png",
+                mime="image/png",
+                use_container_width=True,
+                key=f"dl_{i}"
+            )
+        except Exception:
+            st.caption("⬇️ Install `kaleido` to enable chart downloads (add to requirements.txt).")
 
+# ---------- Insights Tab ----------
 with tabs[1]:
     st.subheader("Executive insights")
     if client is None:
@@ -312,7 +322,16 @@ with tabs[1]:
         with st.spinner("Summarizing dataset..."):
             insights = llm_auto_insights(client, profile_json)
         st.markdown(insights or "_No insights available._")
+        if insights:
+            st.download_button(
+                "⬇️ Download executive summary",
+                data=insights,
+                file_name="executive_summary.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
 
+# ---------- Chat Tab ----------
 with tabs[2]:
     st.subheader("Ask questions in natural language")
     st.caption("Try: *total sales by state*, *profit by month*, *discount vs unit_price*, *top subcategories by quantity*.")
@@ -347,13 +366,18 @@ with tabs[2]:
                     try:
                         ans = con.execute(sql).fetchdf()
                         st.dataframe(ans, use_container_width=True)
-                        # Auto bar if small
+                        # Auto bar if small + PNG download
                         if 1 <= ans.shape[1] <= 3 and ans.shape[0] > 0:
                             cols_ = ans.columns.tolist()
                             if ans.shape[1] == 2:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}")
                                 fig.update_traces(hovertemplate=f"{cols_[0]}: %{{x}}<br>{cols_[1]}: %{{y:,.2f}}<extra></extra>")
                                 st.plotly_chart(fig, use_container_width=True)
+                                try:
+                                    png = fig.to_image(format="png")
+                                    st.download_button("Download chart (PNG)", data=png, file_name="chat_chart.png", mime="image/png", use_container_width=True, key=f"dl_chat")
+                                except Exception:
+                                    st.caption("⬇️ Install `kaleido` to enable chart downloads (add to requirements.txt).")
                             elif ans.shape[1] == 3:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], color=cols_[2], barmode="group",
                                              title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}")
@@ -363,6 +387,7 @@ with tabs[2]:
                         st.error(f"Query failed: {e}")
                         st.session_state.chat_history.append({"role":"assistant","content":f"Query failed: {e}"})
 
+# ---------- Schema Tab ----------
 with tabs[3]:
     st.subheader("Column summary")
     st.json(profile, expanded=False)

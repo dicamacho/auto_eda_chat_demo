@@ -1,4 +1,5 @@
-# app.py — Auto-EDA Agent Demo (Light-only, Viz-expert, polished bars, no Appearance controls)
+
+# app.py — Auto-EDA Agent Demo (Hard-coded ggplot2 theme)
 
 import os, re, json
 from typing import List, Dict, Any
@@ -11,39 +12,25 @@ import plotly.io as pio
 import streamlit as st
 
 # ---------------------------------------------------------------------
-# Page + Light shell (hide Streamlit theme switch)
+# Page (light shell) — we won't hide the theme switch here, but ggplot2
+# is enforced at the figure level so the look is consistent.
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
-st.markdown("""
-<style>
-:root { color-scheme: light; }
-header [data-testid="stHeaderActionElements"] [title*="theme"] { display: none !important; }
-</style>
-""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# Fixed palette & template (no user appearance controls)
+# Hard-code ggplot2 theme/colors
 # ---------------------------------------------------------------------
-PALETTES = {
-    "Echelon (default)": ["#2E77AE","#4C9F70","#F59E0B","#D14F69","#7C3AED","#0891B2"],
-}
-COLOR_SEQ = PALETTES["Echelon (default)"]
-GRID_COLOR = "rgba(0,0,0,0.06)"
-TEMPLATE = "elegant_light"
-
-# Elegant light template (our custom default)
-pio.templates["elegant_light"] = pio.templates["plotly_white"]
-pio.templates["elegant_light"].layout.update(
-    font=dict(family="Inter, Segoe UI, system-ui", size=14, color="#0f172a"),
-    paper_bgcolor="#ffffff",
-    plot_bgcolor="#ffffff",
-    colorway=COLOR_SEQ,
-    hoverlabel=dict(bgcolor="#ffffff", font_size=13, font_family="Inter"),
-    margin=dict(l=50, r=24, t=48, b=40),
-)
+TEMPLATE = "ggplot2"
+# IMPORTANT: do NOT set a custom color sequence so ggplot2's native colors show.
 pio.templates.default = TEMPLATE
 px.defaults.template = TEMPLATE
-px.defaults.color_discrete_sequence = COLOR_SEQ
+try:
+    del px.defaults.color_discrete_sequence  # let ggplot2 decide
+except Exception:
+    px.defaults.color_discrete_sequence = None
+
+# For minor helper styling
+GRID_COLOR = "rgba(0,0,0,0.08)"
 
 # ---------------------------------------------------------------------
 # Optional OpenAI client
@@ -90,9 +77,10 @@ def fmt_pct(x):
         return "-"
 
 def beautify_fig(fig, x_title=None, y_title=None):
+    # Respect ggplot2 styling; only set titles and template.
     fig.update_layout(template=TEMPLATE, legend_title=None)
-    if x_title: fig.update_xaxes(title=x_title, showgrid=False, showline=False, zeroline=False)
-    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
+    if x_title: fig.update_xaxes(title=x_title)
+    if y_title: fig.update_yaxes(title=y_title)
     return fig
 
 def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):
@@ -481,7 +469,7 @@ def _make_lollipop(df, x, y, title=""):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df[y], y=df[x], mode="lines",
-        line=dict(color="rgba(15,23,42,0.18)", width=2),
+        line=dict(width=2),
         hoverinfo="skip", showlegend=False
     ))
     fig.add_trace(go.Scatter(
@@ -491,8 +479,7 @@ def _make_lollipop(df, x, y, title=""):
         hovertemplate=f"<b>%{{y}}</b><br>{y}: %{{x:,.2f}}<extra></extra>",
         name=y
     ))
-    fig.update_yaxes(title=x, showgrid=True, gridcolor=GRID_COLOR, zeroline=False,
-                     categoryorder="array", categoryarray=df[x].tolist())
+    fig.update_yaxes(title=x, zeroline=False, categoryorder="array", categoryarray=df[x].tolist())
     if _is_pct_col(y):
         fig.update_xaxes(title=y, tickformat=".0%")
     elif _is_money_col(y):
@@ -543,9 +530,9 @@ def render_spec(df, spec, topn=12, as_percent=False):
         fig.update_layout(bargap=0.35, uniformtext_minsize=10, uniformtext_mode="hide")
         try:
             avg_val = df[y].mean()
-            fig.add_hline(y=avg_val, line_width=1, line_dash="dot", line_color="rgba(15,23,42,0.35)",
+            fig.add_hline(y=avg_val, line_width=1, line_dash="dot",
                           annotation_text=f"avg {y}: {_fmt_short(avg_val, _is_pct_col(y) or as_percent, _is_money_col(y))}",
-                          annotation_position="top left", annotation_font_color="rgba(15,23,42,0.65)")
+                          annotation_position="top left")
         except Exception:
             pass
 
@@ -587,7 +574,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# Sidebar: data only (no appearance)
+# Sidebar: data only
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Data")
@@ -776,4 +763,4 @@ with tabs[4]:
     st.json(profile, expanded=False)
 
 st.markdown("---")
-st.caption("Built with Streamlit • DuckDB • Plotly • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")
+st.caption("Built with Streamlit • DuckDB • Plotly (ggplot2) • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")

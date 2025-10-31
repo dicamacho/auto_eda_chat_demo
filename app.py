@@ -1,4 +1,4 @@
-# app.py (upgraded + downloads + theme toggle)
+# app.py (agentic version: elegant charts + downloads + theme toggle + Agent tab)
 import os, re, json
 import pandas as pd
 import numpy as np
@@ -231,12 +231,137 @@ def auto_charts(df: pd.DataFrame):
 
     return charts
 
+# ---------- Agent functions (Planner → Executor → Critic) ----------
+def call_planner(client, profile_json, goal):
+    """Ask LLM for a JSON plan of steps to achieve a goal. Returns dict with steps[]."""
+    if client is None:
+        return {"goal": goal, "steps": [{"action":"insight","text":"LLM is disabled. Add OPENAI_API_KEY to enable planning."}]}
+    sys = (
+        "You are a planning agent for data analysis. "
+        "Return JSON with keys: goal (string), steps (array). "
+        "Each step is an object with one of: "
+        "{action:'sql', query:'SELECT ...'}, "
+        "{action:'chart', type:'bar|line|box|area|scatter', x:'', y:'', color?:'' , title?}, "
+        "{action:'insight', text:''}. "
+        "SQL must be SELECT-only and target a table named `data`. "
+        "Prefer 3-6 steps."
+    )
+    usr = f"Goal: {goal}\n\nDataset profile:\n{json.dumps(profile_json, default=str)[:6000]}"
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.1,
+            response_format={"type":"json_object"},
+            messages=[{"role":"system","content":sys},{"role":"user","content":usr}],
+        )
+        return json.loads(r.choices[0].message.content)
+    except Exception as e:
+        return {"goal": goal, "steps": [{"action":"insight","text":f"Planner failed: {e}"}]}
+
+def run_plan_with_critic(client, plan, df, step_budget=6):
+    """Run steps with strict guards; give critic a brief observation to optionally revise."""
+    con = duckdb.connect(database=":memory:")
+    con.register("data", df)
+    report = {"goal": plan.get("goal"), "steps": [], "charts": [], "insights": []}
+    last_df = None
+
+    def observe_df(dfr: pd.DataFrame, max_rows=5):
+        if dfr is None: return {"rows": 0, "columns": [], "sample": []}
+        head = dfr.head(max_rows).to_dict(orient="records")
+        return {"rows": int(len(dfr)), "columns": list(map(str, dfr.columns.tolist())), "sample": head}
+
+    for _ in range(min(step_budget, len(plan.get("steps", [])))):
+        step = plan["steps"][0] if isinstance(plan["steps"], list) and plan["steps"] else None
+        if not step: break
+        plan["steps"] = plan["steps"][1:]  # pop front
+        action = (step.get("action") or "").lower()
+
+        # Execute
+        obs = {"status":"ok"}
+        if action == "sql":
+            sql = step.get("query","")
+            if not safe_sql(sql):
+                obs = {"status":"error","reason":"Unsafe or invalid SQL"}
+            else:
+                try:
+                    last_df = con.execute(sql).fetchdf()
+                    obs = {"status":"ok","result":observe_df(last_df)}
+                except Exception as e:
+                    obs = {"status":"error","reason":str(e)}
+        elif action == "chart":
+            if last_df is None or last_df.empty:
+                obs = {"status":"error","reason":"No data from previous step to chart."}
+            else:
+                t = step.get("type","bar")
+                x = step.get("x"); y = step.get("y"); color = step.get("color"); title = step.get("title")
+                try:
+                    if t == "bar":
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
+                    elif t == "line":
+                        fig = px.line(last_df, x=x, y=y, color=color, title=title)
+                    elif t == "box":
+                        fig = px.box(last_df, x=x, y=y, color=color, title=title)
+                    elif t == "area":
+                        fig = px.area(last_df, x=x, y=y, color=color, title=title)
+                    elif t == "scatter":
+                        fig = px.scatter(last_df, x=x, y=y, color=color, title=title, trendline="ols")
+                    else:
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
+                    report["charts"].append(fig)
+                    obs = {"status":"ok","chart":"rendered"}
+                except Exception as e:
+                    obs = {"status":"error","reason":str(e)}
+        elif action == "insight":
+            txt = step.get("text","")
+            report["insights"].append(txt)
+            obs = {"status":"ok","insight":"added"}
+        else:
+            obs = {"status":"error","reason":"Unknown action"}
+
+        report["steps"].append({"step": step, "observation": obs})
+
+        # Critic feedback (single pass, optional)
+        if client is not None:
+            summary = {"step": step, "observation": obs}
+            try:
+                crit = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    temperature=0.0,
+                    response_format={"type":"json_object"},
+                    messages=[
+                        {"role":"system","content":(
+                            "You are a strict critic. Return JSON: "
+                            "{'status':'ok'|'revise', 'reason':str, 'fix'?: step_json}. "
+                            "Propose 'revise' only if the step clearly fails or a tiny fix will improve it."
+                        )},
+                        {"role":"user","content": json.dumps(summary, default=str)}
+                    ],
+                )
+                verdict = json.loads(crit.choices[0].message.content)
+                if verdict.get("status") == "revise" and verdict.get("fix"):
+                    # execute one revision immediately (counts toward budget)
+                    plan["steps"].insert(0, verdict["fix"])
+            except Exception:
+                pass
+
+    return report
+
+def render_agent_report(report):
+    goal = report.get("goal", "Analysis")
+    st.subheader(f"Agent report — {goal}")
+    for fig in report.get("charts", []):
+        st.plotly_chart(fig, use_container_width=True)
+    if report.get("insights"):
+        st.markdown("**Findings**")
+        for bullet in report["insights"]:
+            st.markdown(f"- {bullet}")
+
 # ---------- Header ----------
 st.markdown("""
 <div style="padding: 8px 14px; border: 1px solid rgba(127,127,127,0.12); border-radius: 10px; background: rgba(127,127,127,0.05)">
   <h1 style="margin:0;font-size:1.8rem;">📊 Auto-EDA Chat Demo</h1>
   <p style="margin:0.25rem 0 0 0;opacity:0.8;">
-    Upload a CSV or try the demo dataset. Get instant charts, concise insights, and chat with an assistant that proposes safe, SELECT-only SQL.
+    Upload a CSV or try the demo dataset. Get instant charts, concise insights, chat with SQL, or run an agentic analysis plan.
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -249,7 +374,7 @@ with st.sidebar:
     else:
         uploaded = None
     st.divider()
-    st.caption("💡 Tip: Add your `OPENAI_API_KEY` in **Settings → Secrets** to enable Insights & Chat.")
+    st.caption("💡 Tip: Add your `OPENAI_API_KEY` in **Settings → Secrets** to enable Insights, Chat, and Agent.")
 
 @st.cache_data(show_spinner=False)
 def load_df(file_or_demo: str):
@@ -291,14 +416,13 @@ cols = st.columns(4)
 for (label, val), col in zip(kpi.items(), cols):
     col.metric(label, val)
 
-tabs = st.tabs(["📈 Charts", "🧠 Insights", "💬 Chat", "🧾 Schema"])
+tabs = st.tabs(["📈 Charts", "🧠 Insights", "💬 Chat", "🤖 Agent", "🧾 Schema"])
 
 # ---------- Charts Tab ----------
 with tabs[0]:
     st.subheader("Auto-generated visuals")
     for i, (title, fig) in enumerate(auto_charts(df)):
         st.plotly_chart(fig, use_container_width=True)
-        # PNG download (requires kaleido)
         try:
             png = fig.to_image(format="png")
             safe_title = "".join(ch if ch.isalnum() or ch in (" ","_","-") else "_" for ch in title).strip().replace(" ","_")
@@ -366,18 +490,12 @@ with tabs[2]:
                     try:
                         ans = con.execute(sql).fetchdf()
                         st.dataframe(ans, use_container_width=True)
-                        # Auto bar if small + PNG download
                         if 1 <= ans.shape[1] <= 3 and ans.shape[0] > 0:
                             cols_ = ans.columns.tolist()
                             if ans.shape[1] == 2:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}")
                                 fig.update_traces(hovertemplate=f"{cols_[0]}: %{{x}}<br>{cols_[1]}: %{{y:,.2f}}<extra></extra>")
                                 st.plotly_chart(fig, use_container_width=True)
-                                try:
-                                    png = fig.to_image(format="png")
-                                    st.download_button("Download chart (PNG)", data=png, file_name="chat_chart.png", mime="image/png", use_container_width=True, key=f"dl_chat")
-                                except Exception:
-                                    st.caption("⬇️ Install `kaleido` to enable chart downloads (add to requirements.txt).")
                             elif ans.shape[1] == 3:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], color=cols_[2], barmode="group",
                                              title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}")
@@ -387,8 +505,21 @@ with tabs[2]:
                         st.error(f"Query failed: {e}")
                         st.session_state.chat_history.append({"role":"assistant","content":f"Query failed: {e}"})
 
-# ---------- Schema Tab ----------
+# ---------- Agent Tab ----------
 with tabs[3]:
+    st.subheader("Agentic analysis")
+    if client is None:
+        st.info("Set an `OPENAI_API_KEY` to enable the Agent.")
+    else:
+        goal = st.text_input("Goal", value="Overview KPIs, trends, top segments, and key drivers.", help="Describe what you want the agent to analyze.")
+        if st.button("Analyze my data", use_container_width=True):
+            with st.spinner("Planning and executing..."):
+                plan = call_planner(client, profile_json, goal)
+                report = run_plan_with_critic(client, plan, df, step_budget=6)
+            render_agent_report(report)
+
+# ---------- Schema Tab ----------
+with tabs[4]:
     st.subheader("Column summary")
     st.json(profile, expanded=False)
 

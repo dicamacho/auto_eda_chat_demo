@@ -1,4 +1,4 @@
-# app.py — Auto-EDA Agent Demo (Light page shell + Theme/Palette picker + Viz-expert + polished bars)
+# app.py — Auto-EDA Agent Demo (Light-only, Viz-expert, polished bars, no Appearance controls)
 
 import os, re, json
 from typing import List, Dict, Any
@@ -22,16 +22,14 @@ header [data-testid="stHeaderActionElements"] [title*="theme"] { display: none !
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# Color palettes (user-selectable)
+# Fixed palette & template (no user appearance controls)
 # ---------------------------------------------------------------------
 PALETTES = {
     "Echelon (default)": ["#2E77AE","#4C9F70","#F59E0B","#D14F69","#7C3AED","#0891B2"],
-    "Emerald":           ["#10B981","#059669","#34D399","#6EE7B7","#A7F3D0","#064E3B"],
-    "Sunset":            ["#EF4444","#F59E0B","#FBBF24","#F87171","#FB7185","#F472B6"],
-    "Ocean":             ["#0EA5E9","#0284C7","#22D3EE","#14B8A6","#06B6D4","#38BDF8"],
-    "Rose":              ["#D946EF","#EC4899","#F472B6","#FB7185","#F43F5E","#E11D48"],
-    "Viridis":           ["#440154","#482878","#3E4989","#31688E","#26828E","#1F9E89","#35B779","#6DCD59","#B4DD2C","#FDE725"],
 }
+COLOR_SEQ = PALETTES["Echelon (default)"]
+GRID_COLOR = "rgba(0,0,0,0.06)"
+TEMPLATE = "elegant_light"
 
 # Elegant light template (our custom default)
 pio.templates["elegant_light"] = pio.templates["plotly_white"]
@@ -39,20 +37,13 @@ pio.templates["elegant_light"].layout.update(
     font=dict(family="Inter, Segoe UI, system-ui", size=14, color="#0f172a"),
     paper_bgcolor="#ffffff",
     plot_bgcolor="#ffffff",
-    colorway=PALETTES["Echelon (default)"],
+    colorway=COLOR_SEQ,
     hoverlabel=dict(bgcolor="#ffffff", font_size=13, font_family="Inter"),
     margin=dict(l=50, r=24, t=48, b=40),
 )
-pio.templates.default = "elegant_light"
-px.defaults.template = "elegant_light"
-px.defaults.color_discrete_sequence = PALETTES["Echelon (default)"]
-GRID_COLOR = "rgba(0,0,0,0.06)"
-
-# Persist theme/palette across reruns
-if "template" not in st.session_state:
-    st.session_state.template = "elegant_light"
-if "palette" not in st.session_state:
-    st.session_state.palette = "Echelon (default)"
+pio.templates.default = TEMPLATE
+px.defaults.template = TEMPLATE
+px.defaults.color_discrete_sequence = COLOR_SEQ
 
 # ---------------------------------------------------------------------
 # Optional OpenAI client
@@ -99,20 +90,9 @@ def fmt_pct(x):
         return "-"
 
 def beautify_fig(fig, x_title=None, y_title=None):
-    # Always apply the selected template
-    fig.update_layout(template=st.session_state.template, legend_title=None)
-
-    # Titles only (don’t force grid/look unless we're on elegant_light)
-    if x_title:
-        fig.update_xaxes(title=x_title)
-    if y_title:
-        fig.update_yaxes(title=y_title)
-
-    # Only enforce our minimal light styling when using our custom template
-    if st.session_state.template == "elegant_light":
-        fig.update_xaxes(showgrid=False, showline=False, zeroline=False)
-        fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
-
+    fig.update_layout(template=TEMPLATE, legend_title=None)
+    if x_title: fig.update_xaxes(title=x_title, showgrid=False, showline=False, zeroline=False)
+    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
     return fig
 
 def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):
@@ -157,18 +137,14 @@ def auto_charts(df: pd.DataFrame):
         vc = df[c].astype(str).value_counts().reset_index()
         vc.columns = [c, "count"]
         vc["cum_pct"] = vc["count"].cumsum() / vc["count"].sum()
-        fig = px.bar(vc.head(20), x=c, y="count", title=f"Top {c} (Pareto, head 20)",
-                     template=st.session_state.template,
-                     color_discrete_sequence=PALETTES[st.session_state.palette])
-        fig.add_scatter(x=vc[c].head(20), y=vc["cum_pct"].head(20), mode="lines+markers",
-                        name="Cumulative %", yaxis="y2")
+        fig = px.bar(vc.head(20), x=c, y="count", title=f"Top {c} (Pareto, head 20)")
+        fig.add_scatter(x=vc[c].head(20), y=vc["cum_pct"].head(20), mode="lines+markers", name="Cumulative %", yaxis="y2")
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", tickformat=".0%"))
         charts.append(("Pareto categories", beautify_fig(fig, c, "count")))
 
     if len(num) >= 2:
         corr = df[num].corr(numeric_only=True).round(2)
-        fig = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation (numeric)",
-                        template=st.session_state.template)
+        fig = px.imshow(corr, text_auto=True, aspect="auto", title="Correlation (numeric)")
         charts.append(("Correlation", beautify_fig(fig)))
 
     if dt and num:
@@ -176,18 +152,14 @@ def auto_charts(df: pd.DataFrame):
         g = df.dropna(subset=[d, y]).copy()
         g["month"] = pd.to_datetime(g[d]).dt.to_period("M").dt.to_timestamp()
         s = g.groupby("month", as_index=False)[y].sum()
-        fig = px.line(s, x="month", y=y, markers=True, title=f"{y} over time (monthly sum)",
-                      template=st.session_state.template,
-                      color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.line(s, x="month", y=y, markers=True, title=f"{y} over time (monthly sum)")
         charts.append(("Monthly", beautify_fig(fig, "month", y)))
 
     if cat and num:
         c, y = cat[0], num[0]
         topk = df[c].astype(str).value_counts().head(6).index
         dfx = df[df[c].astype(str).isin(topk)]
-        fig = px.box(dfx, x=c, y=y, points="suspectedoutliers", title=f"{y} by {c} (box)",
-                     template=st.session_state.template,
-                     color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.box(dfx, x=c, y=y, points="suspectedoutliers", title=f"{y} by {c} (box)")
         charts.append(("Box", beautify_fig(fig, c, y)))
 
     if dt and cat:
@@ -197,24 +169,19 @@ def auto_charts(df: pd.DataFrame):
         g["month"] = pd.to_datetime(g[d]).dt.to_period("M").dt.to_timestamp()
         tbl = g.groupby(["month", c]).size().unstack(fill_value=0)
         long = ((tbl.div(tbl.sum(axis=1), axis=0)).reset_index().melt(id_vars="month", var_name=c, value_name="pct"))
-        fig = px.area(long, x="month", y="pct", color=c, groupnorm="fraction", title=f"Distribution of {c} over time",
-                      template=st.session_state.template,
-                      color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.area(long, x="month", y="pct", color=c, groupnorm="fraction", title=f"Distribution of {c} over time")
         fig.update_yaxes(tickformat=".0%")
         charts.append(("% over time", beautify_fig(fig, "month", "%")))
 
     if len(cat) >= 2:
         a, b = cat[0], cat[1]
         g = df.groupby([a,b], as_index=False).size().sort_values("size", ascending=False)
-        fig = px.treemap(g, path=[a,b], values="size", title=f"Treemap: {a} / {b}",
-                         template=st.session_state.template)
+        fig = px.treemap(g, path=[a,b], values="size", title=f"Treemap: {a} / {b}")
         charts.append(("Treemap", beautify_fig(fig)))
 
     if num:
         col = num[0]
-        fig = px.histogram(df, x=col, nbins=30, title=f"Distribution of {col}",
-                           template=st.session_state.template,
-                           color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.histogram(df, x=col, nbins=30, title=f"Distribution of {col}")
         charts.append(("Histogram", beautify_fig(fig, col, "count")))
 
     return charts
@@ -344,28 +311,17 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                 x = step.get("x"); y = step.get("y"); color = step.get("color"); title = step.get("title")
                 try:
                     if t == "bar":
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title,
-                                     template=st.session_state.template,
-                                     color_discrete_sequence=PALETTES[st.session_state.palette])
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
                     elif t == "line":
-                        fig = px.line(last_df, x=x, y=y, color=color, title=title,
-                                      template=st.session_state.template,
-                                      color_discrete_sequence=PALETTES[st.session_state.palette])
+                        fig = px.line(last_df, x=x, y=y, color=color, title=title)
                     elif t == "box":
-                        fig = px.box(last_df, x=x, y=y, color=color, title=title,
-                                     template=st.session_state.template)
+                        fig = px.box(last_df, x=x, y=y, color=color, title=title)
                     elif t == "area":
-                        fig = px.area(last_df, x=x, y=y, color=color, title=title,
-                                      template=st.session_state.template,
-                                      color_discrete_sequence=PALETTES[st.session_state.palette])
+                        fig = px.area(last_df, x=x, y=y, color=color, title=title)
                     elif t == "scatter":
-                        fig = px.scatter(last_df, x=x, y=y, color=color, title=title,
-                                         template=st.session_state.template,
-                                         color_discrete_sequence=PALETTES[st.session_state.palette])
+                        fig = px.scatter(last_df, x=x, y=y, color=color, title=title)
                     else:
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title,
-                                     template=st.session_state.template,
-                                     color_discrete_sequence=PALETTES[st.session_state.palette])
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
                     beautify_fig(fig)
                     report["charts"].append(fig)
                     obs = {"status":"ok","chart":"rendered"}
@@ -543,7 +499,7 @@ def _make_lollipop(df, x, y, title=""):
         fig.update_xaxes(title=y, tickprefix="$", tickformat="~s")
     else:
         fig.update_xaxes(title=y, tickformat="~s")
-    fig.update_layout(title=title, template=st.session_state.template)
+    fig.update_layout(title=title, template=TEMPLATE)
     return beautify_fig(fig)
 
 def render_spec(df, spec, topn=12, as_percent=False):
@@ -567,9 +523,7 @@ def render_spec(df, spec, topn=12, as_percent=False):
             return _make_lollipop(df, x, y, title=ttl)
 
     if typ == "bar":
-        fig = px.bar(df, x=x, y=y, color=color, title=ttl, text=y,
-                     template=st.session_state.template,
-                     color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.bar(df, x=x, y=y, color=color, title=ttl, text=y)
         fig.update_traces(
             texttemplate=[
                 _fmt_short(v, _is_pct_col(y) or as_percent, _is_money_col(y)) if v is not None else "" 
@@ -596,35 +550,24 @@ def render_spec(df, spec, topn=12, as_percent=False):
             pass
 
     elif typ == "line":
-        fig = px.line(df, x=x, y=y, color=color, markers=True, title=ttl,
-                      template=st.session_state.template,
-                      color_discrete_sequence=PALETTES[st.session_state.palette])
-        if _is_pct_col(y): fig.update_yaxes(tickformat=".0%")
-        if _is_money_col(y): fig.update_yaxes(tickprefix="$", tickformat="~s")
+        fig = px.line(df, x=x, y=y, color=color, markers=True, title=ttl)
 
     elif typ == "area":
-        fig = px.area(df, x=x, y=y, color=color, title=ttl,
-                      template=st.session_state.template,
-                      color_discrete_sequence=PALETTES[st.session_state.palette])
-        if _is_pct_col(y): fig.update_yaxes(tickformat=".0%")
-        if _is_money_col(y): fig.update_yaxes(tickprefix="$", tickformat="~s")
+        fig = px.area(df, x=x, y=y, color=color, title=ttl)
 
     elif typ == "box":
-        fig = px.box(df, x=x, y=y, color=color, title=ttl, points="suspectedoutliers",
-                     template=st.session_state.template)
+        fig = px.box(df, x=x, y=y, color=color, title=ttl, points="suspectedoutliers")
 
     elif typ == "scatter":
-        fig = px.scatter(df, x=x, y=y, color=color, title=ttl,
-                         template=st.session_state.template,
-                         color_discrete_sequence=PALETTES[st.session_state.palette])
+        fig = px.scatter(df, x=x, y=y, color=color, title=ttl)
 
     elif typ == "treemap":
         if y and y in df.columns and np.issubdtype(df[y].dtype, np.number):
             g = df.groupby(x, as_index=False)[y].sum().sort_values(y, ascending=False)
-            fig = px.treemap(g, path=[x], values=y, title=ttl, template=st.session_state.template)
+            fig = px.treemap(g, path=[x], values=y, title=ttl)
         else:
             g = df.groupby(x, as_index=False).size().sort_values("size", ascending=False)
-            fig = px.treemap(g, path=[x], values="size", title=ttl, template=st.session_state.template)
+            fig = px.treemap(g, path=[x], values="size", title=ttl)
     else:
         return None
 
@@ -644,7 +587,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
-# Sidebar: data + appearance
+# Sidebar: data only (no appearance)
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Data")
@@ -652,20 +595,6 @@ with st.sidebar:
     uploaded = None if use_demo else st.file_uploader("Upload CSV", type=["csv"])
     st.divider()
     st.caption("💡 Tip: Add your `OPENAI_API_KEY` in **Settings → Secrets** to enable LLM-powered features.")
-    st.divider()
-    st.subheader("Appearance")
-    template_choice = st.selectbox(
-        "Plotly theme",
-        ["elegant_light","plotly_white","simple_white","plotly","ggplot2","seaborn","presentation"],
-        index=["elegant_light","plotly_white","simple_white","plotly","ggplot2","seaborn","presentation"].index(st.session_state.template)
-    )
-    palette_choice = st.selectbox("Color palette", list(PALETTES.keys()),
-                                  index=list(PALETTES.keys()).index(st.session_state.palette))
-    st.session_state.template = template_choice
-    st.session_state.palette = palette_choice
-    pio.templates.default = st.session_state.template
-    px.defaults.template = st.session_state.template
-    px.defaults.color_discrete_sequence = PALETTES[st.session_state.palette]
 
 # ---------------------------------------------------------------------
 # Load data
@@ -793,15 +722,11 @@ with tabs[2]:
                         if 1 <= ans.shape[1] <= 3 and ans.shape[0] > 0:
                             cols_ = ans.columns.tolist()
                             if ans.shape[1] == 2:
-                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}",
-                                             template=st.session_state.template,
-                                             color_discrete_sequence=PALETTES[st.session_state.palette])
+                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}")
                                 st.plotly_chart(fig, use_container_width=True)
                             elif ans.shape[1] == 3:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], color=cols_[2], barmode="group",
-                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}",
-                                             template=st.session_state.template,
-                                             color_discrete_sequence=PALETTES[st.session_state.palette])
+                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}")
                                 st.plotly_chart(fig, use_container_width=True)
                         st.session_state.chat_history.append({"role":"assistant","content":f"Returned {len(ans)} rows."})
                     except Exception as e:

@@ -1,5 +1,5 @@
 
-# app.py — Auto-EDA Agent Demo (Hard-coded ggplot2 theme, with px.defaults shim)
+# app.py — ggplot2 theme + safe Plotly defaults proxy
 
 import os, re, json
 from typing import List, Dict, Any
@@ -11,29 +11,32 @@ import plotly.express as px
 import plotly.io as pio
 import streamlit as st
 
-# ---------------------------------------------------------------------
-# Page (wide layout)
-# ---------------------------------------------------------------------
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
 
-# ---------------------------------------------------------------------
-# Hard-code ggplot2 theme/colors + compatibility shim
-# ---------------------------------------------------------------------
+# ---------------------- Plotly theme ----------------------
 TEMPLATE = "ggplot2"
 pio.templates.default = TEMPLATE
 px.defaults.template = TEMPLATE
 
-# Some environments don't define px.defaults.text; Plotly tries to read it
-for _attr in ["text"]:
-    if not hasattr(px.defaults, _attr):
-        setattr(px.defaults, _attr, None)
+# Safe proxy for px.defaults: any missing attribute returns None,
+# existing attributes are proxied through without breaking Plotly internals.
+class _PXDefaultsProxy:
+    def __init__(self, base):
+        object.__setattr__(self, "_base", base)
+    def __getattr__(self, name):
+        b = object.__getattribute__(self, "_base")
+        return getattr(b, name) if hasattr(b, name) else None
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_base"), name, value)
 
-# Minimal helper styling (kept super light to let ggplot2 shine)
+try:
+    px.defaults = _PXDefaultsProxy(px.defaults)
+except Exception:
+    # If replacing px.defaults is restricted, we proceed—most environments won't need this.
+    pass
+
 GRID_COLOR = "rgba(0,0,0,0.08)"
 
-# ---------------------------------------------------------------------
-# Optional OpenAI client
-# ---------------------------------------------------------------------
 OPENAI_AVAILABLE = False
 try:
     from openai import OpenAI
@@ -53,9 +56,6 @@ def get_openai_client():
     except Exception:
         return None
 
-# ---------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------
 def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.select_dtypes(include=["object"]).columns:
         try:
@@ -76,7 +76,6 @@ def fmt_pct(x):
         return "-"
 
 def beautify_fig(fig, x_title=None, y_title=None):
-    # Respect ggplot2 styling; only set titles and template.
     fig.update_layout(template=TEMPLATE, legend_title=None)
     if x_title: fig.update_xaxes(title=x_title)
     if y_title: fig.update_yaxes(title=y_title)
@@ -110,9 +109,6 @@ def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):
     sample = df.head(sample_rows).to_dict(orient="records")
     return info, sample
 
-# ---------------------------------------------------------------------
-# Heuristic auto-charts fallback
-# ---------------------------------------------------------------------
 def auto_charts(df: pd.DataFrame):
     charts = []
     num = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -173,9 +169,6 @@ def auto_charts(df: pd.DataFrame):
 
     return charts
 
-# ---------------------------------------------------------------------
-# SQL guard
-# ---------------------------------------------------------------------
 def safe_sql(sql: str) -> bool:
     SAFE = re.compile(r"^\s*select\s", re.IGNORECASE | re.DOTALL)
     blocked = ["insert","update","delete","drop","alter","create","attach","pragma","copy","call","load",";"]
@@ -184,9 +177,6 @@ def safe_sql(sql: str) -> bool:
     s = (sql or "").lower()
     return not any(b in s for b in blocked)
 
-# ---------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------
 def llm_auto_insights(client, profile_json):
     if client is None: return None
     try:
@@ -234,9 +224,6 @@ def llm_to_sql(client, question: str, profile_json: dict) -> dict:
     except Exception as e:
         return {"sql": None, "explanation": None, "natural_answer": f"LLM error: {e}"}
 
-# ---------------------------------------------------------------------
-# Agent (Planner → Executor → Critic)
-# ---------------------------------------------------------------------
 def call_planner(client, profile_json, goal):
     if client is None:
         return {"goal": goal, "steps": [{"action":"insight","text":"LLM is disabled. Add OPENAI_API_KEY to enable planning."}]}
@@ -357,9 +344,6 @@ def render_agent_report(report):
         for bullet in report["insights"]:
             st.markdown(f"- {bullet}")
 
-# ---------------------------------------------------------------------
-# Column classification + viz expert planner
-# ---------------------------------------------------------------------
 def detect_id_series(s: pd.Series, name: str) -> bool:
     n = len(s)
     if n == 0: return False
@@ -435,9 +419,7 @@ def llm_chart_planner(client, profile, sample, buckets, k=6):
     except Exception:
         return None
 
-# ---------------------------------------------------------------------
-# Pretty bars + lollipop helpers
-# ---------------------------------------------------------------------
+import plotly.graph_objects as go
 def _fmt_short(num, is_pct=False, is_money=False):
     if num is None or (isinstance(num, float) and np.isnan(num)):
         return ""
@@ -464,7 +446,6 @@ def _is_pct_col(colname: str):
     return any(k in n for k in ["rate","pct","percent","ratio","margin"])
 
 def _make_lollipop(df, x, y, title=""):
-    import plotly.graph_objects as go
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df[y], y=df[x], mode="lines",
@@ -560,9 +541,6 @@ def render_spec(df, spec, topn=12, as_percent=False):
     fig.update_traces(hovertemplate=None)
     return beautify_fig(fig, x, y or "value")
 
-# ---------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------
 st.markdown("""
 <div style="padding: 8px 14px; border: 1px solid rgba(2,6,23,0.06); border-radius: 10px; background: #ffffff">
   <h1 style="margin:0;font-size:1.8rem;">📊 Auto-EDA Agent Demo</h1>
@@ -572,9 +550,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------
-# Sidebar: data only
-# ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Data")
     use_demo = st.toggle("Use demo dataset", value=True, help="Turn off to upload your own CSV.")
@@ -582,9 +557,6 @@ with st.sidebar:
     st.divider()
     st.caption("💡 Tip: Add your `OPENAI_API_KEY` in **Settings → Secrets** to enable LLM-powered features.")
 
-# ---------------------------------------------------------------------
-# Load data
-# ---------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_df(file_or_demo: str):
     if file_or_demo == "demo":
@@ -596,12 +568,10 @@ if df is None:
     st.info("Upload a CSV from the sidebar or switch on the demo dataset.")
     st.stop()
 
-# Profile + client
 profile, sample = summarize_dataframe(df)
 profile_json = {"profile": profile, "sample_head": sample}
 client = get_openai_client()
 
-# KPIs
 kpi = {}
 try:
     if "sales" in df.columns: kpi["Total Sales"] = fmt_money(df["sales"].sum())
@@ -623,7 +593,6 @@ for (label, val), col in zip(kpi.items(), cols):
 
 tabs = st.tabs(["📈 Charts", "🧠 Insights", "💬 Chat", "🤖 Agent", "🧾 Schema"])
 
-# ----------------- Charts Tab -----------------
 with tabs[0]:
     st.subheader("Agent-picked visuals")
     c1, c2 = st.columns([1,1])
@@ -657,7 +626,6 @@ with tabs[0]:
         for i, (title, fig) in enumerate(auto_charts(df)):
             st.plotly_chart(fig, use_container_width=True)
 
-# ----------------- Insights Tab -----------------
 with tabs[1]:
     st.subheader("Executive insights")
     if client is None:
@@ -670,7 +638,6 @@ with tabs[1]:
             st.download_button("⬇️ Download executive summary", data=insights, file_name="executive_summary.md",
                                mime="text/markdown", use_container_width=True)
 
-# ----------------- Chat Tab -----------------
 with tabs[2]:
     st.subheader("Ask questions in natural language")
     st.caption("Try: *total sales by state*, *profit by month*, *discount vs unit_price*, *top subcategories by quantity*.")
@@ -719,7 +686,6 @@ with tabs[2]:
                         st.error(f"Query failed: {e}")
                         st.session_state.chat_history.append({"role":"assistant","content":f"Query failed: {e}"})
 
-# ----------------- Agent Tab -----------------
 with tabs[3]:
     st.subheader("Agentic analysis")
     if client is None:
@@ -731,15 +697,19 @@ with tabs[3]:
             with st.spinner("Planning and executing..."):
                 plan = call_planner(client, profile_json, goal)
                 report = run_plan_with_critic(client, plan, df, step_budget=6)
-            render_agent_report(report)
+            # Render
+            st.subheader(f"Agent report — {report.get('goal','Analysis')}")
+            for fig in report.get("charts", []):
+                st.plotly_chart(fig, use_container_width=True)
+            if report.get("insights"):
+                st.markdown("**Findings**")
+                for bullet in report["insights"]:
+                    st.markdown(f"- {bullet}")
 
-            # Export concise agent report (JSON-safe)
             def compile_agent_markdown(report, kpi=None):
                 def to_json_safe(obj):
-                    try:
-                        return json.dumps(obj, ensure_ascii=False, default=str)
-                    except Exception:
-                        return str(obj)
+                    try: return json.dumps(obj, ensure_ascii=False, default=str)
+                    except Exception: return str(obj)
                 kpi = kpi or {}
                 lines = [f"# Agent Report — {report.get('goal','Analysis')}"]
                 if kpi:
@@ -751,12 +721,12 @@ with tabs[3]:
                     lines.append(f"**{i}. {s['step'].get('action','')}** — {to_json_safe(s['step'])}")
                     lines.append(f"   - Obs: {to_json_safe(s['observation'])}")
                 return "\n".join(lines)
-            md = compile_agent_markdown(report, kpi=kpi)
+
+            md = compile_agent_markdown(report, kpi={k: v for k, v in kpi.items()})
             st.download_button("⬇️ Download agent report", md, "agent_report.md", "text/markdown", use_container_width=True)
             with st.expander("Show plan & observations"):
                 st.json(report["steps"], expanded=False)
 
-# ----------------- Schema Tab -----------------
 with tabs[4]:
     st.subheader("Column summary")
     st.json(profile, expanded=False)

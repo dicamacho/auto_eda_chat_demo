@@ -99,9 +99,20 @@ def fmt_pct(x):
         return "-"
 
 def beautify_fig(fig, x_title=None, y_title=None):
-    if x_title: fig.update_xaxes(title=x_title, showgrid=False, showline=False, zeroline=False)
-    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
-    fig.update_layout(legend_title=None, template=st.session_state.template)
+    # Always apply the selected template
+    fig.update_layout(template=st.session_state.template, legend_title=None)
+
+    # Titles only (don’t force grid/look unless we're on elegant_light)
+    if x_title:
+        fig.update_xaxes(title=x_title)
+    if y_title:
+        fig.update_yaxes(title=y_title)
+
+    # Only enforce our minimal light styling when using our custom template
+    if st.session_state.template == "elegant_light":
+        fig.update_xaxes(showgrid=False, showline=False, zeroline=False)
+        fig.update_yaxes(showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
+
     return fig
 
 def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):

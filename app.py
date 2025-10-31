@@ -1,5 +1,5 @@
 
-# app.py — ggplot2 theme + safe Plotly defaults proxy
+# app.py — seaborn theme + safe Plotly defaults proxy
 
 import os, re, json
 from typing import List, Dict, Any
@@ -14,7 +14,7 @@ import streamlit as st
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
 
 # ---------------------- Plotly theme ----------------------
-TEMPLATE = "ggplot2"
+TEMPLATE = "seaborn"
 pio.templates.default = TEMPLATE
 px.defaults.template = TEMPLATE
 
@@ -732,4 +732,4 @@ with tabs[4]:
     st.json(profile, expanded=False)
 
 st.markdown("---")
-st.caption("Built with Streamlit • DuckDB • Plotly (ggplot2) • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")
+st.caption("Built with Streamlit • DuckDB • Plotly (seaborn) • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")

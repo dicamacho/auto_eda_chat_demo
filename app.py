@@ -1,5 +1,4 @@
-
-# app.py — seaborn theme + safe Plotly defaults proxy
+# app.py — Auto-EDA Agent Demo (Light-only, Viz-expert, polished bars, no Appearance controls)
 
 import os, re, json
 from typing import List, Dict, Any
@@ -11,32 +10,44 @@ import plotly.express as px
 import plotly.io as pio
 import streamlit as st
 
+# ---------------------------------------------------------------------
+# Page + Light shell (hide Streamlit theme switch)
+# ---------------------------------------------------------------------
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
+st.markdown("""
+<style>
+:root { color-scheme: light; }
+header [data-testid="stHeaderActionElements"] [title*="theme"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
 
-# ---------------------- Plotly theme ----------------------
-TEMPLATE = "seaborn"
+# ---------------------------------------------------------------------
+# Fixed palette & template (no user appearance controls)
+# ---------------------------------------------------------------------
+PALETTES = {
+    "Echelon (default)": ["#2E77AE","#4C9F70","#F59E0B","#D14F69","#7C3AED","#0891B2"],
+}
+COLOR_SEQ = PALETTES["Echelon (default)"]
+GRID_COLOR = "rgba(0,0,0,0.06)"
+TEMPLATE = "elegant_light"
+
+# Elegant light template (our custom default)
+pio.templates["elegant_light"] = pio.templates["plotly_white"]
+pio.templates["elegant_light"].layout.update(
+    font=dict(family="Inter, Segoe UI, system-ui", size=14, color="#0f172a"),
+    paper_bgcolor="#ffffff",
+    plot_bgcolor="#ffffff",
+    colorway=COLOR_SEQ,
+    hoverlabel=dict(bgcolor="#ffffff", font_size=13, font_family="Inter"),
+    margin=dict(l=50, r=24, t=48, b=40),
+)
 pio.templates.default = TEMPLATE
 px.defaults.template = TEMPLATE
+px.defaults.color_discrete_sequence = COLOR_SEQ
 
-# Safe proxy for px.defaults: any missing attribute returns None,
-# existing attributes are proxied through without breaking Plotly internals.
-class _PXDefaultsProxy:
-    def __init__(self, base):
-        object.__setattr__(self, "_base", base)
-    def __getattr__(self, name):
-        b = object.__getattribute__(self, "_base")
-        return getattr(b, name) if hasattr(b, name) else None
-    def __setattr__(self, name, value):
-        setattr(object.__getattribute__(self, "_base"), name, value)
-
-try:
-    px.defaults = _PXDefaultsProxy(px.defaults)
-except Exception:
-    # If replacing px.defaults is restricted, we proceed—most environments won't need this.
-    pass
-
-GRID_COLOR = "rgba(0,0,0,0.08)"
-
+# ---------------------------------------------------------------------
+# Optional OpenAI client
+# ---------------------------------------------------------------------
 OPENAI_AVAILABLE = False
 try:
     from openai import OpenAI
@@ -56,6 +67,9 @@ def get_openai_client():
     except Exception:
         return None
 
+# ---------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------
 def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.select_dtypes(include=["object"]).columns:
         try:
@@ -66,7 +80,7 @@ def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
-def fmt_money(x):
+def fmt_money(x): 
     return f"${x:,.0f}" if pd.notna(x) else "-"
 
 def fmt_pct(x):
@@ -77,8 +91,8 @@ def fmt_pct(x):
 
 def beautify_fig(fig, x_title=None, y_title=None):
     fig.update_layout(template=TEMPLATE, legend_title=None)
-    if x_title: fig.update_xaxes(title=x_title)
-    if y_title: fig.update_yaxes(title=y_title)
+    if x_title: fig.update_xaxes(title=x_title, showgrid=False, showline=False, zeroline=False)
+    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
     return fig
 
 def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):
@@ -109,6 +123,9 @@ def summarize_dataframe(df: pd.DataFrame, max_categories=12, sample_rows=20):
     sample = df.head(sample_rows).to_dict(orient="records")
     return info, sample
 
+# ---------------------------------------------------------------------
+# Heuristic auto-charts fallback
+# ---------------------------------------------------------------------
 def auto_charts(df: pd.DataFrame):
     charts = []
     num = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -169,6 +186,9 @@ def auto_charts(df: pd.DataFrame):
 
     return charts
 
+# ---------------------------------------------------------------------
+# SQL guard
+# ---------------------------------------------------------------------
 def safe_sql(sql: str) -> bool:
     SAFE = re.compile(r"^\s*select\s", re.IGNORECASE | re.DOTALL)
     blocked = ["insert","update","delete","drop","alter","create","attach","pragma","copy","call","load",";"]
@@ -177,6 +197,9 @@ def safe_sql(sql: str) -> bool:
     s = (sql or "").lower()
     return not any(b in s for b in blocked)
 
+# ---------------------------------------------------------------------
+# LLM helpers
+# ---------------------------------------------------------------------
 def llm_auto_insights(client, profile_json):
     if client is None: return None
     try:
@@ -224,6 +247,9 @@ def llm_to_sql(client, question: str, profile_json: dict) -> dict:
     except Exception as e:
         return {"sql": None, "explanation": None, "natural_answer": f"LLM error: {e}"}
 
+# ---------------------------------------------------------------------
+# Agent (Planner → Executor → Critic)
+# ---------------------------------------------------------------------
 def call_planner(client, profile_json, goal):
     if client is None:
         return {"goal": goal, "steps": [{"action":"insight","text":"LLM is disabled. Add OPENAI_API_KEY to enable planning."}]}
@@ -285,7 +311,7 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                 x = step.get("x"); y = step.get("y"); color = step.get("color"); title = step.get("title")
                 try:
                     if t == "bar":
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title, text=y)
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
                     elif t == "line":
                         fig = px.line(last_df, x=x, y=y, color=color, title=title)
                     elif t == "box":
@@ -295,7 +321,7 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                     elif t == "scatter":
                         fig = px.scatter(last_df, x=x, y=y, color=color, title=title)
                     else:
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title, text=y)
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
                     beautify_fig(fig)
                     report["charts"].append(fig)
                     obs = {"status":"ok","chart":"rendered"}
@@ -344,6 +370,9 @@ def render_agent_report(report):
         for bullet in report["insights"]:
             st.markdown(f"- {bullet}")
 
+# ---------------------------------------------------------------------
+# Column classification + viz expert planner
+# ---------------------------------------------------------------------
 def detect_id_series(s: pd.Series, name: str) -> bool:
     n = len(s)
     if n == 0: return False
@@ -419,9 +448,11 @@ def llm_chart_planner(client, profile, sample, buckets, k=6):
     except Exception:
         return None
 
-import plotly.graph_objects as go
+# ---------------------------------------------------------------------
+# Pretty bars + lollipop helpers
+# ---------------------------------------------------------------------
 def _fmt_short(num, is_pct=False, is_money=False):
-    if num is None or (isinstance(num, float) and np.isnan(num)):
+    if num is None or (isinstance(num, float) and np.isnan(num)): 
         return ""
     if is_pct:
         return f"{num*100:.1f}%"
@@ -446,10 +477,11 @@ def _is_pct_col(colname: str):
     return any(k in n for k in ["rate","pct","percent","ratio","margin"])
 
 def _make_lollipop(df, x, y, title=""):
+    import plotly.graph_objects as go
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df[y], y=df[x], mode="lines",
-        line=dict(width=2),
+        line=dict(color="rgba(15,23,42,0.18)", width=2),
         hoverinfo="skip", showlegend=False
     ))
     fig.add_trace(go.Scatter(
@@ -459,7 +491,8 @@ def _make_lollipop(df, x, y, title=""):
         hovertemplate=f"<b>%{{y}}</b><br>{y}: %{{x:,.2f}}<extra></extra>",
         name=y
     ))
-    fig.update_yaxes(title=x, zeroline=False, categoryorder="array", categoryarray=df[x].tolist())
+    fig.update_yaxes(title=x, showgrid=True, gridcolor=GRID_COLOR, zeroline=False,
+                     categoryorder="array", categoryarray=df[x].tolist())
     if _is_pct_col(y):
         fig.update_xaxes(title=y, tickformat=".0%")
     elif _is_money_col(y):
@@ -493,7 +526,7 @@ def render_spec(df, spec, topn=12, as_percent=False):
         fig = px.bar(df, x=x, y=y, color=color, title=ttl, text=y)
         fig.update_traces(
             texttemplate=[
-                _fmt_short(v, _is_pct_col(y) or as_percent, _is_money_col(y)) if v is not None else ""
+                _fmt_short(v, _is_pct_col(y) or as_percent, _is_money_col(y)) if v is not None else "" 
                 for v in df[y]
             ],
             textposition="outside",
@@ -510,9 +543,9 @@ def render_spec(df, spec, topn=12, as_percent=False):
         fig.update_layout(bargap=0.35, uniformtext_minsize=10, uniformtext_mode="hide")
         try:
             avg_val = df[y].mean()
-            fig.add_hline(y=avg_val, line_width=1, line_dash="dot",
+            fig.add_hline(y=avg_val, line_width=1, line_dash="dot", line_color="rgba(15,23,42,0.35)",
                           annotation_text=f"avg {y}: {_fmt_short(avg_val, _is_pct_col(y) or as_percent, _is_money_col(y))}",
-                          annotation_position="top left")
+                          annotation_position="top left", annotation_font_color="rgba(15,23,42,0.65)")
         except Exception:
             pass
 
@@ -541,6 +574,9 @@ def render_spec(df, spec, topn=12, as_percent=False):
     fig.update_traces(hovertemplate=None)
     return beautify_fig(fig, x, y or "value")
 
+# ---------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------
 st.markdown("""
 <div style="padding: 8px 14px; border: 1px solid rgba(2,6,23,0.06); border-radius: 10px; background: #ffffff">
   <h1 style="margin:0;font-size:1.8rem;">📊 Auto-EDA Agent Demo</h1>
@@ -550,6 +586,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ---------------------------------------------------------------------
+# Sidebar: data only (no appearance)
+# ---------------------------------------------------------------------
 with st.sidebar:
     st.header("Data")
     use_demo = st.toggle("Use demo dataset", value=True, help="Turn off to upload your own CSV.")
@@ -557,6 +596,9 @@ with st.sidebar:
     st.divider()
     st.caption("💡 Tip: Add your `OPENAI_API_KEY` in **Settings → Secrets** to enable LLM-powered features.")
 
+# ---------------------------------------------------------------------
+# Load data
+# ---------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_df(file_or_demo: str):
     if file_or_demo == "demo":
@@ -568,10 +610,12 @@ if df is None:
     st.info("Upload a CSV from the sidebar or switch on the demo dataset.")
     st.stop()
 
+# Profile + client
 profile, sample = summarize_dataframe(df)
 profile_json = {"profile": profile, "sample_head": sample}
 client = get_openai_client()
 
+# KPIs
 kpi = {}
 try:
     if "sales" in df.columns: kpi["Total Sales"] = fmt_money(df["sales"].sum())
@@ -593,6 +637,7 @@ for (label, val), col in zip(kpi.items(), cols):
 
 tabs = st.tabs(["📈 Charts", "🧠 Insights", "💬 Chat", "🤖 Agent", "🧾 Schema"])
 
+# ----------------- Charts Tab -----------------
 with tabs[0]:
     st.subheader("Agent-picked visuals")
     c1, c2 = st.columns([1,1])
@@ -626,6 +671,7 @@ with tabs[0]:
         for i, (title, fig) in enumerate(auto_charts(df)):
             st.plotly_chart(fig, use_container_width=True)
 
+# ----------------- Insights Tab -----------------
 with tabs[1]:
     st.subheader("Executive insights")
     if client is None:
@@ -638,6 +684,7 @@ with tabs[1]:
             st.download_button("⬇️ Download executive summary", data=insights, file_name="executive_summary.md",
                                mime="text/markdown", use_container_width=True)
 
+# ----------------- Chat Tab -----------------
 with tabs[2]:
     st.subheader("Ask questions in natural language")
     st.caption("Try: *total sales by state*, *profit by month*, *discount vs unit_price*, *top subcategories by quantity*.")
@@ -675,17 +722,18 @@ with tabs[2]:
                         if 1 <= ans.shape[1] <= 3 and ans.shape[0] > 0:
                             cols_ = ans.columns.tolist()
                             if ans.shape[1] == 2:
-                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}", text=cols_[1])
+                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}")
                                 st.plotly_chart(fig, use_container_width=True)
                             elif ans.shape[1] == 3:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], color=cols_[2], barmode="group",
-                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}", text=cols_[1])
+                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}")
                                 st.plotly_chart(fig, use_container_width=True)
                         st.session_state.chat_history.append({"role":"assistant","content":f"Returned {len(ans)} rows."})
                     except Exception as e:
                         st.error(f"Query failed: {e}")
                         st.session_state.chat_history.append({"role":"assistant","content":f"Query failed: {e}"})
 
+# ----------------- Agent Tab -----------------
 with tabs[3]:
     st.subheader("Agentic analysis")
     if client is None:
@@ -697,19 +745,15 @@ with tabs[3]:
             with st.spinner("Planning and executing..."):
                 plan = call_planner(client, profile_json, goal)
                 report = run_plan_with_critic(client, plan, df, step_budget=6)
-            # Render
-            st.subheader(f"Agent report — {report.get('goal','Analysis')}")
-            for fig in report.get("charts", []):
-                st.plotly_chart(fig, use_container_width=True)
-            if report.get("insights"):
-                st.markdown("**Findings**")
-                for bullet in report["insights"]:
-                    st.markdown(f"- {bullet}")
+            render_agent_report(report)
 
+            # Export concise agent report (JSON-safe)
             def compile_agent_markdown(report, kpi=None):
                 def to_json_safe(obj):
-                    try: return json.dumps(obj, ensure_ascii=False, default=str)
-                    except Exception: return str(obj)
+                    try:
+                        return json.dumps(obj, ensure_ascii=False, default=str)
+                    except Exception:
+                        return str(obj)
                 kpi = kpi or {}
                 lines = [f"# Agent Report — {report.get('goal','Analysis')}"]
                 if kpi:
@@ -721,15 +765,15 @@ with tabs[3]:
                     lines.append(f"**{i}. {s['step'].get('action','')}** — {to_json_safe(s['step'])}")
                     lines.append(f"   - Obs: {to_json_safe(s['observation'])}")
                 return "\n".join(lines)
-
-            md = compile_agent_markdown(report, kpi={k: v for k, v in kpi.items()})
+            md = compile_agent_markdown(report, kpi=kpi)
             st.download_button("⬇️ Download agent report", md, "agent_report.md", "text/markdown", use_container_width=True)
             with st.expander("Show plan & observations"):
                 st.json(report["steps"], expanded=False)
 
+# ----------------- Schema Tab -----------------
 with tabs[4]:
     st.subheader("Column summary")
     st.json(profile, expanded=False)
 
 st.markdown("---")
-st.caption("Built with Streamlit • DuckDB • Plotly (seaborn) • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")
+st.caption("Built with Streamlit • DuckDB • Plotly • OpenAI (optional) • PNG export: kaleido • Source: dicamacho/auto_eda_chat_demo")

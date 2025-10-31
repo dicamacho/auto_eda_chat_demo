@@ -1,4 +1,4 @@
-# app.py — Agentic EDA (agent-picked charts + planner/executor/critic + theme + downloads)
+# app.py — Agentic EDA (Light theme only + Viz-expert chart planner)
 import os, re, json
 import pandas as pd
 import numpy as np
@@ -9,19 +9,26 @@ import streamlit as st
 
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
 
-# ===================== THEME =====================
-with st.sidebar:
-    theme = st.selectbox("Theme", ["Dark","Light"], index=0)
-
-pio.templates["elegant_dark"] = pio.templates["plotly_dark"]
-pio.templates["elegant_dark"].layout.update(
-    font=dict(family="Inter, Segoe UI, system-ui", size=14),
-    paper_bgcolor="#0B0F19", plot_bgcolor="#111827",
-    colorway=["#60A5FA","#22D3EE","#A78BFA","#F472B6","#FCD34D","#34D399"],
-    hoverlabel=dict(bgcolor="#111827", font_size=13),
-    margin=dict(l=50,r=20,t=40,b=40),
+# ===================== LIGHT THEME (no dark toggle) =====================
+pio.templates["elegant_light"] = pio.templates["plotly_white"]
+pio.templates["elegant_light"].layout.update(
+    font=dict(family="Inter, Segoe UI, system-ui", size=14, color="#0f172a"),
+    paper_bgcolor="#ffffff",
+    plot_bgcolor="#ffffff",
+    colorway=[
+        "#2E77AE",  # blue
+        "#4C9F70",  # green
+        "#F59E0B",  # amber
+        "#D14F69",  # rose
+        "#7C3AED",  # violet
+        "#0891B2",  # cyan
+    ],
+    hoverlabel=dict(bgcolor="#ffffff", font_size=13, font_family="Inter"),
+    margin=dict(l=50,r=24,t=48,b=40),
 )
-pio.templates.default = "elegant_dark" if theme == "Dark" else "plotly_white"
+pio.templates.default = "elegant_light"
+
+GRID_COLOR = "rgba(0,0,0,0.06)"
 
 # ===================== OPTIONAL LLM =====================
 OPENAI_AVAILABLE = False
@@ -63,10 +70,8 @@ def fmt_pct(x):
         return "-"
 
 def beautify_fig(fig, x_title=None, y_title=None):
-    if x_title: fig.update_xaxes(title=x_title, showgrid=False)
-    if y_title:
-        grid = "rgba(0,0,0,0.06)" if pio.templates.default=="plotly_white" else "rgba(255,255,255,0.06)"
-        fig.update_yaxes(title=y_title, showgrid=True, gridcolor=grid)
+    if x_title: fig.update_xaxes(title=x_title, showgrid=False, showline=False, zeroline=False)
+    if y_title: fig.update_yaxes(title=y_title, showgrid=True, gridcolor=GRID_COLOR, zeroline=False)
     fig.update_layout(legend_title=None)
     return fig
 
@@ -127,9 +132,8 @@ def auto_charts(df: pd.DataFrame):
         d, y = dt[0], num[0]
         g = df.dropna(subset=[d, y]).copy()
         g["month"] = pd.to_datetime(g[d]).dt.to_period("M").dt.to_timestamp()
-        s = g.groupby("month", as_index=False)[y].mean()
-        s["roll"] = s[y].rolling(3, min_periods=1).mean()
-        fig = px.line(s, x="month", y=[y,"roll"], markers=True, title=f"{y} over time (monthly avg + 3-mo rolling)")
+        s = g.groupby("month", as_index=False)[y].sum()
+        fig = px.line(s, x="month", y=y, markers=True, title=f"{y} over time (monthly sum)")
         charts.append(("Monthly", beautify_fig(fig, "month", y)))
 
     # D) Box
@@ -293,7 +297,7 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                     elif t == "area":
                         fig = px.area(last_df, x=x, y=y, color=color, title=title)
                     elif t == "scatter":
-                        fig = px.scatter(last_df, x=x, y=y, color=color, title=title, trendline="ols")
+                        fig = px.scatter(last_df, x=x, y=y, color=color, title=title)
                     else:
                         fig = px.bar(last_df, x=x, y=y, color=color, title=title)
                     beautify_fig(fig)
@@ -388,22 +392,25 @@ def llm_chart_planner(client, profile, sample, buckets, k=6):
     prompt = {
       "role": "user",
       "content": (
-        "You are a data viz planner. Return a JSON with key 'charts' (array). "
+        "You are a **senior data visualization expert**. Return JSON with key 'charts' (array). "
         "Use only these df columns:\n"
         f"{json.dumps(buckets, default=str)}\n\n"
         "Rules:\n"
         "- Avoid id columns completely.\n"
-        "- Prefer time on x when present; use month buckets if daily is noisy.\n"
-        "- Keep category cardinality <= 20. For heavy-cardinality, propose top-N.\n"
-        "- Use intuitive titles (Exec-ready). Explain in 'note' why it matters.\n"
-        "- Output 4-8 charts. Types allowed: bar,line,area,box,scatter,treemap.\n\n"
+        "- Prefer time on x when present; use monthly buckets if daily is noisy.\n"
+        "- For bar charts with categorical x and numeric y, aggregate y (sum) and sort descending; keep top-N (<=12).\n"
+        "- Keep category cardinality <= 20 overall.\n"
+        "- Titles must be executive-ready (e.g., 'Total Profit by Category').\n"
+        "- Choose elegant, uncluttered visuals (avoid overplotting).\n"
+        "- Types allowed: bar, line, area, box, scatter, treemap.\n"
+        "- Return 4–8 charts using fields present in the dataset.\n\n"
         "Dataset profile:\n" + json.dumps({"profile": profile, "sample_head": sample}, default=str)[:6000]
       )
     }
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            temperature=0.2,
+            temperature=0.15,
             response_format={"type": "json_object"},
             messages=[
                 {"role":"system","content":"Respond ONLY with JSON: {\"charts\":[...]}"},
@@ -424,7 +431,7 @@ def guess_formatter(name: str):
     n = (name or "").lower()
     if any(k in n for k in ["sales","revenue","price","amount","cost"]):
         return "currency"
-    if any(k in n for k in ["rate","pct","percent","ratio"]):
+    if any(k in n for k in ["rate","pct","percent","ratio","margin"]):
         return "percent"
     return None
 
@@ -432,31 +439,60 @@ def looks_good(df: pd.DataFrame, spec) -> bool:
     if spec["type"] in {"bar","box","scatter","area","line"}:
         for c in [spec.get("x"), spec.get("y"), spec.get("color")]:
             if c and c not in df.columns: return False
-    if spec.get("y") in df.columns:
+    # numeric target variance
+    if spec.get("y") in df.columns and np.issubdtype(df[spec["y"]].dtype, np.number):
         s = df[spec["y"]].dropna()
         if len(s) < 3 or s.std(ddof=0) == 0: return False
+    # cardinality checks on x/color
     for c, limit in [(spec["x"], 25), (spec.get("color"), 20)]:
         if c and c in df.columns:
             if df[c].astype(str).nunique(dropna=True) > limit: return False
     return True
 
+def _aggregate_for_bar(df, x, y):
+    # If x is categorical and y numeric -> aggregate & sort desc, keep top 12
+    if not np.issubdtype(df[x].dtype, np.number) and y and y in df.columns and np.issubdtype(df[y].dtype, np.number):
+        g = df.groupby(x, as_index=False)[y].sum()
+        g = g.sort_values(y, ascending=False).head(12)
+        return g
+    return df
+
+def _monthly_agg(df, x, y):
+    if np.issubdtype(df[x].dtype, np.datetime64) and y and np.issubdtype(df[y].dtype, np.number):
+        g = df.dropna(subset=[x, y]).copy()
+        g["month"] = pd.to_datetime(g[x]).dt.to_period("M").dt.to_timestamp()
+        s = g.groupby("month", as_index=False)[y].sum()
+        return s.rename(columns={"month": x})
+    return df
+
 def render_spec(df, spec):
     typ, x, y, color = spec["type"], spec["x"], spec.get("y"), spec.get("color")
     ttl = spec.get("title") or (f"{y} by {x}" if y else f"{x}")
+
+    # Pre-aggregation helpers
+    if typ in {"bar"} and x in df.columns and y in df.columns:
+        df = _aggregate_for_bar(df, x, y)
+    if typ in {"line","area"} and x in df.columns and y in df.columns:
+        df = _monthly_agg(df, x, y)
+
+    # Limit heavy cats on x
     if x in df.columns and not np.issubdtype(df[x].dtype, np.number):
         vc = df[x].astype(str).value_counts()
         top = vc.index[:20]
         df = df[df[x].astype(str).isin(top)]
+
+    # Render
     if typ == "bar":
         fig = px.bar(df, x=x, y=y, color=color, title=ttl)
+        fig.update_traces(marker_line_width=0, hovertemplate=None)
     elif typ == "line":
-        fig = px.line(df, x=x, y=y, color=color, title=ttl)
+        fig = px.line(df, x=x, y=y, color=color, markers=True, title=ttl)
     elif typ == "area":
-        fig = px.area(df, x=x, y=y, color=color, title=ttl)
+        fig = px.area(df, x=x, y=y, color=color, title=ttl, groupnorm=None)
     elif typ == "box":
         fig = px.box(df, x=x, y=y, color=color, title=ttl, points="suspectedoutliers")
     elif typ == "scatter":
-        fig = px.scatter(df, x=x, y=y, color=color, title=ttl, trendline="ols")
+        fig = px.scatter(df, x=x, y=y, color=color, title=ttl)
     elif typ == "treemap":
         if y and y in df.columns and np.issubdtype(df[y].dtype, np.number):
             g = df.groupby(x, as_index=False)[y].sum().sort_values(y, ascending=False)
@@ -466,21 +502,23 @@ def render_spec(df, spec):
             fig = px.treemap(g, path=[x], values="size", title=ttl)
     else:
         return None
-    for col in [x, y]:
-        fmt = guess_formatter(col)
+
+    # Formatting
+    for col in [y]:
+        fmt = guess_formatter(col or "")
         if fmt == "currency":
             fig.update_yaxes(tickprefix="$")
         elif fmt == "percent":
             fig.update_yaxes(tickformat=".0%")
-    beautify_fig(fig)
+    beautify_fig(fig, x, y or "value")
     return fig
 
 # ===================== UI =====================
 st.markdown("""
-<div style="padding: 8px 14px; border: 1px solid rgba(127,127,127,0.12); border-radius: 10px; background: rgba(127,127,127,0.05)">
+<div style="padding: 8px 14px; border: 1px solid rgba(2,6,23,0.06); border-radius: 10px; background: #ffffff">
   <h1 style="margin:0;font-size:1.8rem;">📊 Auto-EDA Agent Demo</h1>
-  <p style="margin:0.25rem 0 0 0;opacity:0.8;">
-    Upload a CSV and let the agent pick the most insightful charts, summarize findings, chat with SQL, or run a multi-step plan.
+  <p style="margin:0.25rem 0 0 0;opacity:0.75;">
+    Upload a CSV and let the agent pick elegant, insightful charts, summarize findings, chat with SQL, or run a multi-step plan.
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -544,7 +582,7 @@ with tabs[0]:
     buckets = classify_columns(df)
     specs = None
     if client:
-        with st.spinner("Letting the planner choose charts..."):
+        with st.spinner("Letting the viz expert choose charts..."):
             specs = llm_chart_planner(client, profile, sample, buckets, k=6)
 
     rendered = 0
@@ -647,8 +685,13 @@ with tabs[3]:
                 report = run_plan_with_critic(client, plan, df, step_budget=6)
             render_agent_report(report)
 
-            # Export concise agent report
+            # Export concise agent report (JSON-safe)
             def compile_agent_markdown(report, kpi=None):
+                def to_json_safe(obj):
+                    try:
+                        return json.dumps(obj, ensure_ascii=False, default=str)
+                    except Exception:
+                        return str(obj)
                 kpi = kpi or {}
                 lines = [f"# Agent Report — {report.get('goal','Analysis')}"]
                 if kpi:
@@ -657,8 +700,8 @@ with tabs[3]:
                     lines += ["## Findings", *[f"- {s}" for s in report["insights"]], ""]
                 lines += ["## Steps & Observations"]
                 for i, s in enumerate(report.get("steps", []), 1):
-                    lines.append(f"**{i}. {s['step'].get('action','')}** — {json.dumps(s['step'], ensure_ascii=False)}")
-                    lines.append(f"   - Obs: {json.dumps(s['observation'], ensure_ascii=False)}")
+                    lines.append(f"**{i}. {s['step'].get('action','')}** — {to_json_safe(s['step'])}")
+                    lines.append(f"   - Obs: {to_json_safe(s['observation'])}")
                 return "\n".join(lines)
             md = compile_agent_markdown(report, kpi=kpi)
             st.download_button("⬇️ Download agent report", md, "agent_report.md", "text/markdown", use_container_width=True)

@@ -1,7 +1,7 @@
-
 [theme]
-primaryColor = "#3B82F6"            # Indigo-500
-backgroundColor = "#0B0F19"         # Near-black
-secondaryBackgroundColor = "#111827" # Gray-900
-textColor = "#E5E7EB"               # Gray-200
-font = "Inter"
+base = "light"
+primaryColor = "#2E77AE"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7FAFC"
+textColor = "#0F172A"
+font = "sans serif"

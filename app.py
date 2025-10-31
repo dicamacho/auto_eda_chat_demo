@@ -1,5 +1,5 @@
 
-# app.py — Auto-EDA Agent Demo (Hard-coded ggplot2 theme)
+# app.py — Auto-EDA Agent Demo (Hard-coded ggplot2 theme, with px.defaults shim)
 
 import os, re, json
 from typing import List, Dict, Any
@@ -12,24 +12,23 @@ import plotly.io as pio
 import streamlit as st
 
 # ---------------------------------------------------------------------
-# Page (light shell) — we won't hide the theme switch here, but ggplot2
-# is enforced at the figure level so the look is consistent.
+# Page (wide layout)
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Auto-EDA Agent Demo", page_icon="📊", layout="wide")
 
 # ---------------------------------------------------------------------
-# Hard-code ggplot2 theme/colors
+# Hard-code ggplot2 theme/colors + compatibility shim
 # ---------------------------------------------------------------------
 TEMPLATE = "ggplot2"
-# IMPORTANT: do NOT set a custom color sequence so ggplot2's native colors show.
 pio.templates.default = TEMPLATE
 px.defaults.template = TEMPLATE
-try:
-    del px.defaults.color_discrete_sequence  # let ggplot2 decide
-except Exception:
-    px.defaults.color_discrete_sequence = None
 
-# For minor helper styling
+# Some environments don't define px.defaults.text; Plotly tries to read it
+for _attr in ["text"]:
+    if not hasattr(px.defaults, _attr):
+        setattr(px.defaults, _attr, None)
+
+# Minimal helper styling (kept super light to let ggplot2 shine)
 GRID_COLOR = "rgba(0,0,0,0.08)"
 
 # ---------------------------------------------------------------------
@@ -67,7 +66,7 @@ def ensure_datetime(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
-def fmt_money(x): 
+def fmt_money(x):
     return f"${x:,.0f}" if pd.notna(x) else "-"
 
 def fmt_pct(x):
@@ -299,7 +298,7 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                 x = step.get("x"); y = step.get("y"); color = step.get("color"); title = step.get("title")
                 try:
                     if t == "bar":
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title, text=y)
                     elif t == "line":
                         fig = px.line(last_df, x=x, y=y, color=color, title=title)
                     elif t == "box":
@@ -309,7 +308,7 @@ def run_plan_with_critic(client, plan, df, step_budget=6):
                     elif t == "scatter":
                         fig = px.scatter(last_df, x=x, y=y, color=color, title=title)
                     else:
-                        fig = px.bar(last_df, x=x, y=y, color=color, title=title)
+                        fig = px.bar(last_df, x=x, y=y, color=color, title=title, text=y)
                     beautify_fig(fig)
                     report["charts"].append(fig)
                     obs = {"status":"ok","chart":"rendered"}
@@ -440,7 +439,7 @@ def llm_chart_planner(client, profile, sample, buckets, k=6):
 # Pretty bars + lollipop helpers
 # ---------------------------------------------------------------------
 def _fmt_short(num, is_pct=False, is_money=False):
-    if num is None or (isinstance(num, float) and np.isnan(num)): 
+    if num is None or (isinstance(num, float) and np.isnan(num)):
         return ""
     if is_pct:
         return f"{num*100:.1f}%"
@@ -513,7 +512,7 @@ def render_spec(df, spec, topn=12, as_percent=False):
         fig = px.bar(df, x=x, y=y, color=color, title=ttl, text=y)
         fig.update_traces(
             texttemplate=[
-                _fmt_short(v, _is_pct_col(y) or as_percent, _is_money_col(y)) if v is not None else "" 
+                _fmt_short(v, _is_pct_col(y) or as_percent, _is_money_col(y)) if v is not None else ""
                 for v in df[y]
             ],
             textposition="outside",
@@ -709,11 +708,11 @@ with tabs[2]:
                         if 1 <= ans.shape[1] <= 3 and ans.shape[0] > 0:
                             cols_ = ans.columns.tolist()
                             if ans.shape[1] == 2:
-                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}")
+                                fig = px.bar(ans, x=cols_[0], y=cols_[1], title=f"{cols_[1]} by {cols_[0]}", text=cols_[1])
                                 st.plotly_chart(fig, use_container_width=True)
                             elif ans.shape[1] == 3:
                                 fig = px.bar(ans, x=cols_[0], y=cols_[1], color=cols_[2], barmode="group",
-                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}")
+                                             title=f"{cols_[1]} by {cols_[0]} colored by {cols_[2]}", text=cols_[1])
                                 st.plotly_chart(fig, use_container_width=True)
                         st.session_state.chat_history.append({"role":"assistant","content":f"Returned {len(ans)} rows."})
                     except Exception as e:
